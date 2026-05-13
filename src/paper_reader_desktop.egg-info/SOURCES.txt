@@ -1,0 +1,16 @@
+README.md
+pyproject.toml
+src/paper_reader/__init__.py
+src/paper_reader/__main__.py
+src/paper_reader/ai_provider.py
+src/paper_reader/app.py
+src/paper_reader/models.py
+src/paper_reader/pdf_export.py
+src/paper_reader/processing.py
+src/paper_reader_desktop.egg-info/PKG-INFO
+src/paper_reader_desktop.egg-info/SOURCES.txt
+src/paper_reader_desktop.egg-info/dependency_links.txt
+src/paper_reader_desktop.egg-info/entry_points.txt
+src/paper_reader_desktop.egg-info/requires.txt
+src/paper_reader_desktop.egg-info/top_level.txt
+tests/test_processing.py
