@@ -1,0 +1,8 @@
+What is the main difference between supervised and unsupervised learning?
+What are the two main categories of supervised learning?
+How is precision different from recall in classification metrics?
+What is overfitting and how can regularization prevent it?
+Why is cross-validation important in model evaluation?
+What is the purpose of feature engineering in machine learning?
+How do decision trees work for classification?
+What is k-fold cross-validation and why use it?

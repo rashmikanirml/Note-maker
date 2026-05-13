@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
+import json
 from dataclasses import dataclass
 from typing import Protocol, Iterable
 
 import requests
+from pathlib import Path
 
 
 class AIProvider(Protocol):
@@ -21,7 +23,6 @@ class LocalFallbackProvider:
 
     def summarize(self, text: str) -> str:
         from paper_reader.processing import build_summary
-
         return build_summary(text)
 
     @property
@@ -29,13 +30,66 @@ class LocalFallbackProvider:
         return "Local"
 
     def answer_questions(self, text: str, questions: list[str]) -> list[tuple[str, str]]:
-        from paper_reader.processing import build_question_answers
+        """Answer questions by extracting relevant sentences from the text."""
+        answers: list[tuple[str, str]] = []
+        for question in questions:
+            answer = self._find_answer(text, question)
+            answers.append((question, answer))
+        return answers
+    
+    def _find_answer(self, text: str, question: str) -> str:
+        """Build a grounded answer from the most relevant paragraphs in the paper."""
+        import re
 
-        return build_question_answers(text, questions)
+        stopwords = {
+            "what", "why", "how", "when", "where", "which", "who", "the", "and", "for", "with", "from",
+            "that", "this", "into", "about", "their", "there", "these", "those", "explain", "describe",
+            "define", "discuss", "compare", "state", "list", "name", "question",
+        }
+
+        terms = [w for w in re.findall(r"\b[a-z]{3,}\b", question.lower()) if w not in stopwords]
+        if not terms:
+            terms = re.findall(r"\b[a-z]{3,}\b", question.lower())
+
+        paragraphs = [p.strip() for p in re.split(r"\n\s*\n+", text) if p.strip()]
+        if not paragraphs:
+            paragraphs = [text.strip()]
+
+        scored: list[tuple[int, str]] = []
+        for paragraph in paragraphs:
+            lower = paragraph.lower()
+            score = 0
+            for term in terms:
+                if term in lower:
+                    score += lower.count(term)
+            if score > 0:
+                scored.append((score, paragraph))
+
+        if scored:
+            scored.sort(key=lambda item: item[0], reverse=True)
+            best_paragraphs = [item[1] for item in scored[:2]]
+            sentences: list[str] = []
+            for paragraph in best_paragraphs:
+                for sentence in re.split(r"(?<=[.!?])\s+", paragraph):
+                    cleaned = sentence.strip()
+                    if cleaned:
+                        sentences.append(cleaned)
+                    if len(sentences) >= 4:
+                        break
+                if len(sentences) >= 4:
+                    break
+
+            answer = " ".join(sentences)
+            if len(answer) > 700:
+                answer = answer[:697].rstrip() + "..."
+            return answer
+
+        from paper_reader.processing import build_summary
+
+        return build_summary(text, max_sentences=3)
 
     def build_notes(self, text: str) -> list[str]:
         from paper_reader.processing import build_study_notes
-
         return build_study_notes(text)
 
 
@@ -186,13 +240,91 @@ class ResilientProvider:
 def get_ai_provider() -> AIProvider:
     providers: list[AIProvider] = []
     # prefer configured external providers
-    if os.getenv("HF_TOKEN"):
-        providers.append(HuggingFaceInferenceProvider())
+    # Prefer HF token from env, otherwise from user config file
+    hf_token = os.getenv("HF_TOKEN")
+    hf_model_env = os.getenv("HF_MODEL")
+    if not hf_token:
+        try:
+            cfg_path = Path.home() / ".note_maker_config.json"
+            if cfg_path.exists():
+                cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+                hf_token = cfg.get("HF_TOKEN") or hf_token
+                hf_model_env = hf_model_env or cfg.get("HF_MODEL")
+        except Exception:
+            # ignore config read errors
+            hf_token = hf_token
+
+    if hf_token:
+        providers.append(HuggingFaceInferenceProvider(token=hf_token, model=hf_model_env or None))
+
     if os.getenv("OPENAI_API_KEY"):
         providers.append(OpenAIProvider())
+    # Google Gemini / Generative Models
+    if os.getenv("GEMINI_API_KEY"):
+        # lazy-import provider class defined below
+        providers.append(GeminiProvider())
     # always append local fallback last
     providers.append(LocalFallbackProvider())
 
     if len(providers) == 1:
         return providers[0]
     return ResilientProvider(providers=providers)
+
+
+@dataclass(slots=True)
+class GeminiProvider:
+    """Simple connector for Google Generative Models (Gemini) REST API.
+
+    Requires `GEMINI_API_KEY` environment variable (Bearer token or API key).
+    Set `GEMINI_MODEL` to e.g. `models/text-bison-001` or `models/chat-bison-001`.
+    """
+    model: str = "models/text-bison-001"
+    api_key: str | None = None
+
+    def __post_init__(self) -> None:
+        self.api_key = self.api_key or os.getenv("GEMINI_API_KEY")
+        self.model = os.getenv("GEMINI_MODEL", self.model)
+
+    @property
+    def name(self) -> str:
+        return "Gemini"
+
+    def _call_generate(self, prompt: str) -> str:
+        if not self.api_key:
+            raise RuntimeError("GEMINI_API_KEY is not configured")
+
+        url = f"https://generativelanguage.googleapis.com/v1beta2/{self.model}:generateText"
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        payload = {
+            "prompt": {"text": prompt},
+            "temperature": 0.2,
+            "maxOutputTokens": 800,
+        }
+        resp = requests.post(url, headers=headers, json=payload, timeout=60)
+        resp.raise_for_status()
+        data = resp.json()
+        # Google generative responses commonly include 'candidates' with 'output'
+        candidates = data.get("candidates") or []
+        if candidates:
+            first = candidates[0]
+            return first.get("output") or first.get("content") or str(first)
+        # fallback for other shapes
+        return data.get("output") or data.get("result", "") or str(data)
+
+    def summarize(self, text: str) -> str:
+        prompt = f"Summarize this paper in 5 concise sentences:\n\n{text[:8000]}"
+        return self._call_generate(prompt)
+
+    def answer_questions(self, text: str, questions: list[str]) -> list[tuple[str, str]]:
+        answers: list[tuple[str, str]] = []
+        for question in questions:
+            prompt = (
+                f"You are a helpful assistant. Use the following paper to answer the question concisely and accurately.\n\nPaper:\n{text[:8000]}\n\nQuestion: {question}\n\nAnswer:")
+            resp = self._call_generate(prompt)
+            answers.append((question, resp))
+        return answers
+
+    def build_notes(self, text: str) -> list[str]:
+        prompt = f"List 8 concise study notes from the paper as short bullet points:\n\n{text[:8000]}"
+        resp = self._call_generate(prompt)
+        return [f"- {line.strip()}" for line in resp.splitlines() if line.strip()]

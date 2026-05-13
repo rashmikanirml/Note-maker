@@ -8,7 +8,7 @@ from unittest import mock
 from reportlab.pdfgen import canvas
 
 from paper_reader.pdf_export import export_report
-from paper_reader.processing import analyze_document, build_summary
+from paper_reader.processing import analyze_document, build_summary, extract_questions_from_text
 
 
 class ProcessingTests(unittest.TestCase):
@@ -74,3 +74,31 @@ class ProcessingTests(unittest.TestCase):
             self.assertIn("Paper title", analysis["extracted_text"])
             self.assertTrue(analysis["summary"])
             self.assertTrue(analysis["questions_and_answers"])
+
+    def test_extract_questions_from_text_marks_and_numbered(self) -> None:
+        text = (
+            "Section A\n"
+            "1. Explain supervised learning\n"
+            "2) Define precision and recall\n"
+            "What is overfitting?\n"
+            "This line is not a question\n"
+        )
+
+        questions = extract_questions_from_text(text)
+
+        self.assertIn("Explain supervised learning?", questions)
+        self.assertIn("Define precision and recall?", questions)
+        self.assertIn("What is overfitting?", questions)
+
+    def test_extract_questions_from_text_question_label_and_subparts(self) -> None:
+        text = (
+            "Question 1: Discuss the role of data preprocessing\n"
+            "(a) Compare precision and recall\n"
+            "(5 marks)\n"
+            "Conclusion paragraph\n"
+        )
+
+        questions = extract_questions_from_text(text)
+
+        self.assertIn("Discuss the role of data preprocessing?", questions)
+        self.assertIn("Compare precision and recall?", questions)

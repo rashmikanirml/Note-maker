@@ -6,6 +6,8 @@ Requires-Python: >=3.11
 Description-Content-Type: text/markdown
 Requires-Dist: pdfplumber>=0.11
 Requires-Dist: pypdf>=5.0
+Requires-Dist: pytesseract>=0.3
+Requires-Dist: pdf2image>=1.16
 Requires-Dist: python-docx>=1.1
 Requires-Dist: reportlab>=4.2
 Requires-Dist: requests>=2.32

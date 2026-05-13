@@ -144,6 +144,74 @@ def build_question_answers(text: str, questions: Iterable[str] | None = None) ->
     return answers
 
 
+def extract_questions_from_text(text: str) -> list[str]:
+    """Extract likely questions from document text.
+
+    Supports explicit question marks and common exam formats like:
+    "1. Explain ..." or "Q2: Define ...".
+    """
+    extracted: list[str] = []
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    starts_with_command = re.compile(
+        r"^(what|why|how|when|where|which|who|define|explain|describe|compare|contrast|discuss|analyze|evaluate|justify|list|state|name|outline|write|derive|prove|calculate|find)\b",
+        re.IGNORECASE,
+    )
+
+    for line in lines:
+        candidate = re.sub(r"\s+", " ", line)
+        candidate = re.sub(r"^[-*]\s*", "", candidate)
+
+        # Pattern: Q1: What is ...
+        q_prefix = re.match(r"^(?:q(?:uestion)?\s*\d*\s*[:.)-]?\s*)(.+)$", candidate, re.IGNORECASE)
+        if q_prefix:
+            candidate = q_prefix.group(1).strip()
+
+        # Remove marks suffix often used in papers, e.g. "(5 marks)"
+        candidate = re.sub(r"\(\s*\d+\s*marks?\s*\)\s*$", "", candidate, flags=re.IGNORECASE).strip()
+
+        # Direct question ending with a '?'
+        if candidate.endswith("?") and len(candidate) > 8:
+            extracted.append(candidate)
+            continue
+
+        # Pattern: 1. Explain ... / 1) Explain ... / (a) Explain ...
+        numbered = re.match(r"^(?:(?:\d+|[a-zA-Z])\s*[.)-]|\([a-zA-Z]\))\s*(.+)$", candidate)
+        if numbered:
+            body = numbered.group(1).strip()
+            if starts_with_command.match(body):
+                if not body.endswith("?"):
+                    body = f"{body}?"
+                extracted.append(body)
+                continue
+
+        # Pattern: Question 1: Explain ...
+        question_label = re.match(r"^question\s*\d+\s*[:.)-]?\s*(.+)$", candidate, re.IGNORECASE)
+        if question_label:
+            body = question_label.group(1).strip()
+            if body and starts_with_command.match(body):
+                if not body.endswith("?"):
+                    body = f"{body}?"
+                extracted.append(body)
+                continue
+
+        # General command-like question line even without numbering
+        if starts_with_command.match(candidate) and 8 <= len(candidate) <= 220:
+            if not candidate.endswith("?"):
+                candidate = f"{candidate}?"
+            extracted.append(candidate)
+
+    # Deduplicate while preserving order
+    unique: list[str] = []
+    seen: set[str] = set()
+    for question in extracted:
+        normalized = question.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(question)
+    return unique
+
+
 def analyze_document(path: str | Path, questions: Iterable[str] | None = None):
     document_path = Path(path)
     text = load_document(document_path)
